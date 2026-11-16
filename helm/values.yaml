@@ -56,9 +56,34 @@ dnsTimeoutSeconds: 10
 
 # How long a key name may keep failing so before it counts as a failed
 # signature (RFC 8617 5.2.1 allows it): the message is then sealed cv=fail
-# instead of waiting in the queue to the end of its life. Kept per name in
-# this process, from its first failure; any answer clears it.
+# instead of waiting in the queue to the end of its life. The first failure
+# of each name is kept in Redis, shared by the replicas and kept over
+# restarts; any answer clears it.
 dnsTempfailGraceSeconds: 14400
+
+# Where the first DNS failure of each key name is kept, at
+# <keyPrefix>dnsfail:<name> with a TTL of dnsTempfailGraceSeconds plus a day,
+# renewed on each failure. While Redis does not answer, the count goes on in
+# the process and no mail waits on Redis. One address or Sentinels.
+redis:
+  addr: ""
+  sentinel:
+    # host:port, comma-separated; with them addr stays empty.
+    addrs: ""
+    master: ""
+    username: ""
+    # Secret and key with the Sentinels' password; empty name: none.
+    passwordSecret:
+      name: ""
+      key: password
+  username: ""
+  # Secret and key with the Redis password; empty name: none.
+  passwordSecret:
+    name: ""
+    key: password
+  db: 0
+  # Required: two installations on one Redis never share a key.
+  keyPrefix: "arc-milter:"
 
 db:
   # postgres or mysql

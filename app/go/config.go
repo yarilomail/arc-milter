@@ -65,6 +65,7 @@ type config struct {
 	// dnsGrace is DNS_TEMPFAIL_GRACE_SECONDS: past it a name that keeps
 	// failing is a failed signature, not one more retry.
 	dnsGrace time.Duration
+	redis    redisConfig
 }
 
 // defaultQueries read the seal domain's newest row with the ARC selector,
@@ -82,6 +83,18 @@ func positive(name string, def int) (int, error) {
 		return 0, fmt.Errorf("config: %s %q: a whole number above 0", name, os.Getenv(name))
 	}
 	return v, nil
+}
+
+// redisConfig is where the first failure of each DNS name is kept.
+type redisConfig struct {
+	addr             string
+	sentinelAddrs    []string
+	sentinelMaster   string
+	sentinelUser     string
+	sentinelPassword string
+	user, password   string
+	db               int
+	prefix           string
 }
 
 type vaultConfig struct {
@@ -160,6 +173,9 @@ func loadConfig() (config, error) {
 	if c.authservID == "" || strings.ContainsAny(c.authservID, " \t;") {
 		return c, fmt.Errorf("config: AUTHSERV_ID %q: the MX's authserv-id is required", c.authservID)
 	}
+	if c.redis, err = loadRedis(); err != nil {
+		return c, err
+	}
 	def, ok := defaultQueries[c.dbDriver]
 	if !ok {
 		return c, fmt.Errorf("config: DB_DRIVER %q: postgres or mysql", c.dbDriver)
@@ -178,4 +194,40 @@ func loadConfig() (config, error) {
 		return c, fmt.Errorf("config: KEY_DECRYPT %q: vault or none", c.decrypt)
 	}
 	return c, nil
+}
+
+// loadRedis reads one address (REDIS_ADDR) or Sentinels (REDIS_SENTINEL_ADDRS,
+// comma-separated, with REDIS_SENTINEL_MASTER); the key prefix is required, so
+// two installations on one Redis never share a key.
+func loadRedis() (redisConfig, error) {
+	r := redisConfig{
+		addr:             strings.TrimSpace(os.Getenv("REDIS_ADDR")),
+		sentinelMaster:   strings.TrimSpace(os.Getenv("REDIS_SENTINEL_MASTER")),
+		sentinelUser:     os.Getenv("REDIS_SENTINEL_USERNAME"),
+		sentinelPassword: os.Getenv("REDIS_SENTINEL_PASSWORD"),
+		user:             os.Getenv("REDIS_USERNAME"),
+		password:         os.Getenv("REDIS_PASSWORD"),
+		prefix:           os.Getenv("REDIS_KEY_PREFIX"),
+	}
+	for _, a := range strings.Split(os.Getenv("REDIS_SENTINEL_ADDRS"), ",") {
+		if a = strings.TrimSpace(a); a != "" {
+			r.sentinelAddrs = append(r.sentinelAddrs, a)
+		}
+	}
+	db, err := strconv.Atoi(env("REDIS_DB", "0"))
+	if err != nil || db < 0 {
+		return r, fmt.Errorf("config: REDIS_DB %q: a whole number of 0 or more", os.Getenv("REDIS_DB"))
+	}
+	r.db = db
+	switch {
+	case r.addr != "" && len(r.sentinelAddrs) > 0:
+		return r, fmt.Errorf("config: REDIS_ADDR and REDIS_SENTINEL_ADDRS: one or the other")
+	case r.addr == "" && len(r.sentinelAddrs) == 0:
+		return r, fmt.Errorf("config: REDIS_ADDR or REDIS_SENTINEL_ADDRS is required")
+	case len(r.sentinelAddrs) > 0 && r.sentinelMaster == "":
+		return r, fmt.Errorf("config: REDIS_SENTINEL_ADDRS needs REDIS_SENTINEL_MASTER")
+	case strings.TrimSpace(r.prefix) == "":
+		return r, fmt.Errorf("config: REDIS_KEY_PREFIX is required")
+	}
+	return r, nil
 }

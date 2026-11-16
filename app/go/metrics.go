@@ -21,6 +21,9 @@ var (
 	dnsGivenUp = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "arc_dns_given_up_total", Help: "Key lookups taken as failed because the name kept failing past DNS_TEMPFAIL_GRACE_SECONDS.",
 	})
+	redisErrors = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "arc_redis_errors_total", Help: "Redis calls that failed; the DNS failure count went on in the process meanwhile.",
+	})
 	keysLoaded = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "arc_keys_loaded", Help: "Domains with a key in the cache.",
 	})

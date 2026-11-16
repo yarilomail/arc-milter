@@ -140,7 +140,13 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("milter: listen %s: %w", cfg.listenAddr, err)
 	}
-	srv := newMilterServer(cfg, cache, newDNSKeys(net.DefaultResolver, cfg.dnsGrace))
+	rdb := newRedisClient(cfg.redis)
+	defer func() { _ = rdb.Close() }()
+	fails := &sharedFails{
+		redis: &redisFails{rdb: rdb, prefix: cfg.redis.prefix, ttl: cfg.dnsGrace + 24*time.Hour},
+		local: newMemoryFails(cfg.dnsGrace),
+	}
+	srv := newMilterServer(cfg, cache, newDNSKeys(net.DefaultResolver, cfg.dnsGrace, fails))
 	slog.Info("arc-milter: listening", "addr", cfg.listenAddr, "db", cfg.dbDriver, "decrypt", cfg.decrypt,
 		"seal_domain", cfg.sealDomain, "selector", cfg.selector, "authserv_id", cfg.authservID,
 		"dns_timeout", cfg.dnsTimeout.String(), "dns_grace", cfg.dnsGrace.String(), "db_max_open", cfg.dbMaxOpen, "read_timeout", cfg.milterRead.String(),

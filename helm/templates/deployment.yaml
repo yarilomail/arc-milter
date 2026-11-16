@@ -72,6 +72,37 @@ spec:
               value: {{ .Values.dnsTimeoutSeconds | quote }}
             - name: DNS_TEMPFAIL_GRACE_SECONDS
               value: {{ .Values.dnsTempfailGraceSeconds | quote }}
+            {{- if .Values.redis.sentinel.addrs }}
+            - name: REDIS_SENTINEL_ADDRS
+              value: {{ .Values.redis.sentinel.addrs | quote }}
+            - name: REDIS_SENTINEL_MASTER
+              value: {{ required "redis.sentinel.master is required with sentinel addrs" .Values.redis.sentinel.master | quote }}
+            - name: REDIS_SENTINEL_USERNAME
+              value: {{ .Values.redis.sentinel.username | quote }}
+            {{- with .Values.redis.sentinel.passwordSecret.name }}
+            - name: REDIS_SENTINEL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.redis.sentinel.passwordSecret.key }}
+            {{- end }}
+            {{- else }}
+            - name: REDIS_ADDR
+              value: {{ required "redis.addr or redis.sentinel.addrs is required" .Values.redis.addr | quote }}
+            {{- end }}
+            - name: REDIS_USERNAME
+              value: {{ .Values.redis.username | quote }}
+            {{- with .Values.redis.passwordSecret.name }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.redis.passwordSecret.key }}
+            {{- end }}
+            - name: REDIS_DB
+              value: {{ .Values.redis.db | quote }}
+            - name: REDIS_KEY_PREFIX
+              value: {{ required "redis.keyPrefix is required" .Values.redis.keyPrefix | quote }}
             - name: KEY_DECRYPT
               value: {{ .Values.keyDecrypt | quote }}
             - name: KEY_CACHE_SIZE

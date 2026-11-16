@@ -111,7 +111,7 @@ func (m *mapKeys) PublicKey(ctx context.Context, selector, domain string) (*rsa.
 	rec, ok := m.records[selector+"._domainkey."+domain]
 	temp, delay := m.temp, m.delay
 	m.mu.Unlock()
-	d := &dnsKeys{grace: time.Hour, now: time.Now, failing: map[string]time.Time{}, lookupTXT: func(ctx context.Context, _ string) ([]string, error) {
+	d := &dnsKeys{grace: time.Hour, now: time.Now, fails: newMemoryFails(time.Hour), lookupTXT: func(ctx context.Context, _ string) ([]string, error) {
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():
@@ -401,7 +401,7 @@ func TestParsePublicKeyRecord(t *testing.T) {
 func TestDNSGraceForANameThatKeepsFailing(t *testing.T) {
 	ck := &clock{t: time.Unix(1_800_000_000, 0)}
 	answer := false
-	d := &dnsKeys{grace: 4 * time.Hour, now: ck.now, failing: map[string]time.Time{},
+	d := &dnsKeys{grace: 4 * time.Hour, now: ck.now, fails: newMemoryFails(4 * time.Hour),
 		lookupTXT: func(context.Context, string) ([]string, error) {
 			if answer {
 				return nil, &net.DNSError{Err: "no such host", IsNotFound: true}

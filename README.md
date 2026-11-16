@@ -35,7 +35,7 @@ The body is streamed through the hashes as it arrives and never held.
 | The key was never read; the database or Vault is down | tempfail at the end of the headers: the relay keeps the message and retries |
 | The database answers and has no row for `SEAL_DOMAIN` with `ARC_SELECTOR` | accepted unsealed, one log line and `arc_messages_total{result="no_key"}`: that is configuration, not an outage |
 | A key lookup in DNS fails for any reason but a name that does not exist (a timeout, SERVFAIL) | tempfail at the end of the message. A `cv=fail` seal over a lookup that may answer in a minute would spoil the chain for good |
-| The same key name has kept failing so for `DNS_TEMPFAIL_GRACE_SECONDS` (4 hours) since its first failure | that signature counts as failed (RFC 8617 5.2.1 allows it) and the message is sealed `cv=fail`, instead of waiting in the queue to the end of its life when it would go out without this milter. The first failure is kept per name in the process; any answer from DNS clears it, and so does a restart |
+| The same key name has kept failing so for `DNS_TEMPFAIL_GRACE_SECONDS` (4 hours) since its first failure | that signature counts as failed (RFC 8617 5.2.1 allows it) and the message is sealed `cv=fail`, instead of waiting in the queue to the end of its life when it would go out without this milter. The first failure of each name is in Redis at `<REDIS_KEY_PREFIX>dnsfail:<name>`, shared by the replicas and kept over restarts, with a TTL of the grace plus a day renewed on each failure; any answer from DNS deletes it. While Redis does not answer, the count goes on in the process (`arc_redis_errors_total`) and no mail waits on Redis |
 | The newest AMS uses `simple` header canonicalization and does not check | accepted unsealed, `arc_messages_total{result="simple_unverifiable"}`: the MTA hands the milter fields without the whitespace after the colon, so the signed bytes may not be the rebuilt ones, and a `cv=fail` on a sound chain could not be undone after |
 | A key name does not exist, or the key is revoked (`p=` empty) | that signature fails, and the chain with it |
 
@@ -82,6 +82,9 @@ The milter protocol version 2 this milter speaks has Postfix drop the space afte
 | `AUTHSERV_ID` | --- (required) | the authserv-id of this ADMD's `Authentication-Results`, copied into the AAR |
 | `DNS_TIMEOUT_SECONDS` | `10` | one deadline for the key lookups of a message |
 | `DNS_TEMPFAIL_GRACE_SECONDS` | `14400` | how long a key name may keep failing temporarily before its signature counts as failed |
+| `REDIS_ADDR` or `REDIS_SENTINEL_ADDRS` + `REDIS_SENTINEL_MASTER` | --- (one required) | where the first DNS failures are kept; Sentinels comma-separated, with `REDIS_SENTINEL_USERNAME` / `REDIS_SENTINEL_PASSWORD` |
+| `REDIS_USERNAME`, `REDIS_PASSWORD`, `REDIS_DB` | ---, ---, `0` | Redis login and database |
+| `REDIS_KEY_PREFIX` | --- (required; the chart sets `arc-milter:`) | so two installations on one Redis never share a key |
 | `LISTEN_ADDR` | `0.0.0.0:8893` | milter listener |
 | `METRICS_ADDR` | `0.0.0.0:8081` | `/healthz`, `/readyz`, `/metrics` |
 | `MILTER_READ_TIMEOUT_SECONDS` / `MILTER_WRITE_TIMEOUT_SECONDS` | `3600` / `60` | a silent connection is closed after the first; a reply Postfix does not take after the second |
@@ -105,6 +108,7 @@ The milter protocol version 2 this milter speaks has Postfix drop the space afte
 | `arc_chain_total{cv}` | sealed messages by the `cv` this hop found: `none`, `pass`, `fail` |
 | `arc_dns_temporary_errors_total` | key lookups that failed for a reason other than a missing name |
 | `arc_dns_given_up_total` | of those, the ones taken as failed past `DNS_TEMPFAIL_GRACE_SECONDS` |
+| `arc_redis_errors_total` | Redis calls that failed; the count went on in the process meanwhile |
 | `arc_keys_loaded`, `arc_key_cache_lookups_total{result}`, `arc_key_fetch_errors_total{stage}` | the key cache, as dkim-milter's |
 
 ## Helm
