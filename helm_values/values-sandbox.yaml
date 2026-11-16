@@ -1,0 +1,45 @@
+# The yarilo stand: arc-milter on relay-fwd-out after dkim-milter-fwd. The key
+# is the row with selector arc for fwd.d00001.test in yarilo-postfix's MySQL
+# table dkim, encrypted with the Transit key arc, never dkim-milter's; Vault in
+# namespace vault over TLS from the stand's internal CA. Installed with helm upgrade in
+# yarilo-relay; the DSN Secret is dkim-milter's (docs-internal
+# relay-milters-stand.md). The stand runs what develop built last.
+image:
+  repository: ghcr.io/yarilomail/arc-milter
+  tag: "develop"
+  pullPolicy: Always
+
+# The forwarder's domain: dkim-milter-fwd's signDomain and postsrsd's SRS domain.
+sealDomain: fwd.d00001.test
+
+# relay-mx's myhostname, the authserv-id rspamd stamps inbound mail with.
+authservId: relay.d00001.test
+
+db:
+  driver: mysql
+  dsnSecret:
+    name: dkim-milter-db
+    key: DB_DSN
+
+keyDecrypt: vault
+
+vault:
+  addr: "https://vault.vault.svc:8200"
+  # Its own role and key: the role decrypts with arc only, never with dkim,
+  # which holds every client domain's DKIM key (seconddns/k8s_vault
+  # scripts/setup-dkim-transit.sh, MILTER=arc).
+  role: arc-milter
+  transitKey: arc
+  caCertSecret: arc-milter-vault-ca
+  caCertificate:
+    issuerRef:
+      name: yarilo-internal-ca
+      kind: Issuer
+
+# The stand's Calico enforces it; only relay-fwd-out runs the milter.
+networkPolicy:
+  enabled: true
+  postfix:
+    podSelector:
+      matchLabels:
+        app: relay-fwd-out
