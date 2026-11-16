@@ -1,0 +1,148 @@
+image:
+  # Docker Hub keeps every release tag; GHCR is the pruned CI working set.
+  repository: docker.io/0kaba0/arc-milter
+  # Empty: the chart's appVersion, the image this chart was released with.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Stateless: every replica loads the same key.
+replicaCount: 1
+
+# Milter port; the forwarding Postfix lists it in smtpd_milters after the
+# DKIM signer, so the AMS covers the forwarder's DKIM-Signature.
+milterPort: 8893
+
+# A milter connection silent this long is closed. Postfix keeps one
+# connection for a whole SMTP session and says nothing while the client
+# sends, so this outlasts any session; it frees connections nobody uses.
+milterReadTimeoutSeconds: 3600
+# A reply Postfix does not take within this closes the connection.
+milterWriteTimeoutSeconds: 60
+
+# Who may reach the milter port. Needs a CNI that enforces NetworkPolicy
+# (Calico, Cilium, the kube-router built into k3s); flannel alone ignores it.
+networkPolicy:
+  enabled: false
+  # The Postfix pods that run this milter.
+  postfix:
+    podSelector: {}
+    # Empty: Postfix in this release's namespace.
+    namespaceSelector: {}
+
+# /healthz, /readyz (ready once the key query runs and, with Vault, the token
+# may decrypt), /metrics; open to every pod, for probes and Prometheus.
+metricsPort: 8081
+
+# The forwarder's domain, d= of every seal: the same fwd.<domain> the DKIM
+# signer and the SRS rewriting use. Required.
+sealDomain: ""
+
+# The ARC key's selector: its own row in the dkim table beside the domain's
+# DKIM row, and its own TXT record at <selector>._domainkey.<sealDomain>.
+# The key must be RSA: ARC defines rsa-sha256 only.
+selector: arc
+
+# The authserv-id of the Authentication-Results this ADMD's MX adds (the
+# Postfix myhostname of the MX that runs rspamd). That field is copied into
+# the ARC-Authentication-Results; without one the AAR says "none". Required.
+authservId: ""
+
+# One deadline for all the key lookups of one message while the chain it
+# came with is checked. A lookup that fails for any reason but a missing
+# name tempfails the message: a cv=fail seal would spoil the chain for good.
+dnsTimeoutSeconds: 10
+
+# How long a key name may keep failing so before it counts as a failed
+# signature (RFC 8617 5.2.1 allows it): the message is then sealed cv=fail
+# instead of waiting in the queue to the end of its life. The first failure
+# of each name is kept as dnsFailureStore says; any answer clears it.
+dnsTempfailGraceSeconds: 14400
+
+# Where the first DNS failure of each key name is kept. memory: in this
+# process, so a restart or another replica starts the count again. redis:
+# shared by the replicas and kept over restarts, at <redis.keyPrefix>dnsfail:<name>
+# with a TTL of dnsTempfailGraceSeconds plus a day, renewed on each failure;
+# while Redis does not answer, the count goes on in the process.
+dnsFailureStore: memory
+
+# Read only with dnsFailureStore: redis. One address or Sentinels.
+redis:
+  addr: ""
+  sentinel:
+    # host:port, comma-separated; with them addr stays empty.
+    addrs: ""
+    master: ""
+    username: ""
+    # Secret and key with the Sentinels' password; empty name: none.
+    passwordSecret:
+      name: ""
+      key: password
+  username: ""
+  # Secret and key with the Redis password; empty name: none.
+  passwordSecret:
+    name: ""
+    key: password
+  db: 0
+  # Required: two installations on one Redis never share a key.
+  keyPrefix: "arc-milter:"
+
+db:
+  # postgres or mysql
+  driver: postgres
+  # Secret holding the DSN: postgres://user:pass@host:5432/db?sslmode=...
+  # or, for mysql, user:pass@tcp(host:3306)/db
+  dsnSecret:
+    name: ""
+    key: DB_DSN
+  # The seal domain's row: domain, selector, the stored private key, with two
+  # placeholders, the domain and the selector ($1 and $2 for postgres, ? and
+  # ? for mysql). Empty: the driver's default: SELECT domain, selector,
+  # private_key_enc FROM dkim WHERE lower(trim(domain)) = <domain> AND
+  # selector = <selector> ORDER BY created_at DESC, id DESC LIMIT 1.
+  query: ""
+  # Connections to the database: only a first message, or the key past its
+  # TTL in the background, takes one.
+  maxOpenConns: 4
+
+# vault: the column holds Vault Transit ciphertext; none: the column holds PEM.
+keyDecrypt: vault
+
+# The key loads on demand into the same cache as dkim-milter's. A cached key
+# past ttlSeconds keeps sealing while its row is read again in the background;
+# with the database or Vault down a key once read seals on, and a message
+# before the first read tempfails. One key per forwarding domain: a handful.
+keyCache:
+  size: 100
+  ttlSeconds: 600
+  missTtlSeconds: 60
+
+vault:
+  addr: ""
+  # Kubernetes auth role bound to this release's ServiceAccount arc-milter.
+  role: ""
+  authPath: kubernetes
+  transitPath: transit
+  transitKey: dkim
+  # Secret with ca.crt when Vault's certificate is not from a public CA.
+  caCertSecret: ""
+  # With an issuer named, the chart makes a Certificate that writes
+  # caCertSecret, so ca.crt is the issuing CA's: one that also signed Vault's.
+  caCertificate:
+    issuerRef:
+      name: ""
+      kind: Issuer
+
+# debug: debug lines too; empty: info
+logLevel: ""
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 200m
+    memory: 64Mi
+
+nodeSelector: {}
