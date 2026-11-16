@@ -2,7 +2,9 @@
 
 Postfix **milter** in Go that adds an ARC set ([RFC 8617](https://www.rfc-editor.org/rfc/rfc8617)) to each forwarded message, sealed with the forwarder's own key. One process, one job: it checks the chain the message arrived with, copies the forwarding ADMD's `Authentication-Results`, signs the message and seals the chain. The key comes from the same `dkim` table and Vault Transit key as dkim-milter's.
 
-Licensed under **AGPLv3**, see [LICENSE](LICENSE).
+Licensed under **AGPLv3**, see [LICENSE](LICENSE). **Website:** [yarilomail.org](https://yarilomail.org) · **Docs:** [doc.yarilomail.org](https://doc.yarilomail.org)
+
+[![CI](https://github.com/yarilomail/arc-milter/actions/workflows/ci.yaml/badge.svg?branch=develop)](https://github.com/yarilomail/arc-milter/actions/workflows/ci.yaml) [![Go 1.27](https://img.shields.io/badge/Go-1.27-00ADD8?logo=go&logoColor=white)](app/go/go.mod) [![RFC 8617](https://img.shields.io/badge/RFC-8617-informational)](https://www.rfc-editor.org/rfc/rfc8617) [![Container](https://img.shields.io/badge/ghcr.io-arc--milter-blue?logo=github)](https://github.com/yarilomail/arc-milter/pkgs/container/arc-milter) [![Docker Hub](https://img.shields.io/docker/pulls/0kaba0/arc-milter?logo=docker&logoColor=white)](https://hub.docker.com/r/0kaba0/arc-milter) [![License: AGPL v3](https://img.shields.io/badge/license-AGPLv3-blue.svg)](LICENSE) ![Status: development](https://img.shields.io/badge/status-development-orange)
 
 ## Where it runs
 
