@@ -13,6 +13,9 @@ const (
 	defaultListenAddr   = "0.0.0.0:8893"
 	defaultMetricsAddr  = "0.0.0.0:8081"
 	defaultSelector     = "arc"
+	// defaultTransitKey is arc-milter's own Transit key: dkim-milter's dkim
+	// decrypts every client domain's DKIM key, which this milter must not reach.
+	defaultTransitKey = "arc"
 	defaultCacheSize    = 100
 	defaultCacheTTL     = 600
 	defaultCacheMissTTL = 60
@@ -147,7 +150,7 @@ func loadConfig() (config, error) {
 			tokenFile:   env("VAULT_SA_TOKEN_FILE", defaultSATokenFile),
 			caCert:      os.Getenv("VAULT_CACERT"),
 			transitPath: env("VAULT_TRANSIT_PATH", "transit"),
-			transitKey:  env("VAULT_TRANSIT_KEY", "dkim"),
+			transitKey:  env("VAULT_TRANSIT_KEY", defaultTransitKey),
 		},
 	}
 	var err error

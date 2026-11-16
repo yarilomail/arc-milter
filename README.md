@@ -1,6 +1,6 @@
 # arc-milter
 
-Postfix **milter** in Go that adds an ARC set ([RFC 8617](https://www.rfc-editor.org/rfc/rfc8617)) to each forwarded message, sealed with the forwarder's own key. One process, one job: it checks the chain the message arrived with, copies the forwarding ADMD's `Authentication-Results`, signs the message and seals the chain. The key comes from the same `dkim` table and Vault Transit key as dkim-milter's.
+Postfix **milter** in Go that adds an ARC set ([RFC 8617](https://www.rfc-editor.org/rfc/rfc8617)) to each forwarded message, sealed with the forwarder's own key. One process, one job: it checks the chain the message arrived with, copies the forwarding ADMD's `Authentication-Results`, signs the message and seals the chain. The key is a row of the same `dkim` table as dkim-milter's, encrypted with a Vault Transit key of its own, `arc`.
 
 Licensed under **AGPLv3**, see [LICENSE](LICENSE). **Website:** [yarilomail.org](https://yarilomail.org) · **Docs:** [doc.yarilomail.org](https://doc.yarilomail.org)
 
@@ -50,7 +50,7 @@ ARC defines `rsa-sha256` only, so the key is RSA. It is a row of its own in the 
 ```sh
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out arc.key
 openssl pkey -in arc.key -pubout -outform DER | base64 -w0 > arc.pub
-vault write -field=ciphertext transit/encrypt/dkim plaintext="$(base64 -w0 < arc.key)" > arc.enc
+vault write -field=ciphertext transit/encrypt/arc plaintext="$(base64 -w0 < arc.key)" > arc.enc
 ```
 
 ```sql
@@ -62,7 +62,7 @@ DNS: `arc._domainkey.fwd.example.org. TXT "v=DKIM1; k=rsa; p=<arc.pub>"`. Delete
 
 The key cache, the Vault client and readiness are dkim-milter's: the key loads on the first message into an LRU cache, a key past `KEY_CACHE_TTL_SECONDS` seals on while its row is read again in the background, and `/readyz` answers 200 once the key query has run and, with Vault, the token may decrypt. One key per forwarding domain: the cache holds a handful.
 
-The Vault role binds this release's ServiceAccount (`arc-milter`) to a policy with `update` on `transit/decrypt/dkim`, as for dkim-milter.
+The Vault role `arc-milter` binds this release's ServiceAccount (`arc-milter`) to a policy with `update` on `transit/decrypt/arc` and nothing else. The Transit key `dkim` decrypts every client domain's DKIM key, and this milter parses other servers' headers and DNS answers: a flaw in it must not reach those keys, so it never shares dkim-milter's key or role.
 
 ## Postfix
 
@@ -98,7 +98,7 @@ The milter protocol version 2 this milter speaks has Postfix drop the space afte
 | `KEY_DECRYPT` | `vault` | `vault` (the column holds Transit ciphertext) or `none` (PEM) |
 | `KEY_CACHE_SIZE` / `KEY_CACHE_TTL_SECONDS` / `KEY_CACHE_MISS_TTL_SECONDS` | `100` / `600` / `60` | the key cache |
 | `VAULT_ADDR`, `VAULT_ROLE` | --- | required with `vault` |
-| `VAULT_AUTH_PATH`, `VAULT_TRANSIT_PATH`, `VAULT_TRANSIT_KEY` | `kubernetes`, `transit`, `dkim` | mounts and key |
+| `VAULT_AUTH_PATH`, `VAULT_TRANSIT_PATH`, `VAULT_TRANSIT_KEY` | `kubernetes`, `transit`, `arc` | mounts and key; the key is this milter's own, never dkim-milter's `dkim` |
 | `VAULT_CACERT` | --- | CA file for Vault's certificate |
 | `VAULT_SA_TOKEN_FILE` | the pod's token | ServiceAccount token for Kubernetes auth |
 | `LOG_LEVEL` | `info` | `debug` |
