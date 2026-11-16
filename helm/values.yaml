@@ -57,14 +57,17 @@ dnsTimeoutSeconds: 10
 # How long a key name may keep failing so before it counts as a failed
 # signature (RFC 8617 5.2.1 allows it): the message is then sealed cv=fail
 # instead of waiting in the queue to the end of its life. The first failure
-# of each name is kept in Redis, shared by the replicas and kept over
-# restarts; any answer clears it.
+# of each name is kept as dnsFailureStore says; any answer clears it.
 dnsTempfailGraceSeconds: 14400
 
-# Where the first DNS failure of each key name is kept, at
-# <keyPrefix>dnsfail:<name> with a TTL of dnsTempfailGraceSeconds plus a day,
-# renewed on each failure. While Redis does not answer, the count goes on in
-# the process and no mail waits on Redis. One address or Sentinels.
+# Where the first DNS failure of each key name is kept. memory: in this
+# process, so a restart or another replica starts the count again. redis:
+# shared by the replicas and kept over restarts, at <redis.keyPrefix>dnsfail:<name>
+# with a TTL of dnsTempfailGraceSeconds plus a day, renewed on each failure;
+# while Redis does not answer, the count goes on in the process.
+dnsFailureStore: memory
+
+# Read only with dnsFailureStore: redis. One address or Sentinels.
 redis:
   addr: ""
   sentinel:

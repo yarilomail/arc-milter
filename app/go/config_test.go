@@ -104,7 +104,10 @@ func TestChartDefaultsMatchTheCode(t *testing.T) {
 			t.Errorf("deployment.yaml does not pass %s as %s", tc.value, tc.env)
 		}
 	}
-	for _, env := range []string{"SEAL_DOMAIN", "ARC_SELECTOR", "AUTHSERV_ID", "REDIS_ADDR", "REDIS_SENTINEL_ADDRS", "REDIS_KEY_PREFIX", "REDIS_DB"} {
+	if values["dnsFailureStore"] != failStoreMemory {
+		t.Errorf("dnsFailureStore = %q in values.yaml, %q in the code", values["dnsFailureStore"], failStoreMemory)
+	}
+	for _, env := range []string{"SEAL_DOMAIN", "ARC_SELECTOR", "AUTHSERV_ID", "DNS_FAILURE_STORE", "REDIS_ADDR", "REDIS_SENTINEL_ADDRS", "REDIS_KEY_PREFIX", "REDIS_DB"} {
 		if !strings.Contains(string(tmpl), "- name: "+env+"\n") {
 			t.Errorf("deployment.yaml does not set %s", env)
 		}
@@ -124,7 +127,7 @@ func TestDefaultQueriesTakeOnlyTheARCRow(t *testing.T) {
 
 func TestLoadConfig(t *testing.T) {
 	base := map[string]string{"SEAL_DOMAIN": "Fwd.Example", "AUTHSERV_ID": "mx.example", "DB_DSN": "x", "KEY_DECRYPT": "none",
-		"REDIS_ADDR": "r:6379", "REDIS_KEY_PREFIX": "arc-milter:"}
+		"DNS_FAILURE_STORE": "", "REDIS_ADDR": "", "REDIS_KEY_PREFIX": ""}
 	for _, tc := range []struct {
 		name string
 		set  map[string]string
@@ -138,7 +141,10 @@ func TestLoadConfig(t *testing.T) {
 		{"selector of two labels", map[string]string{"ARC_SELECTOR": "a.b"}, false},
 		{"DNS timeout 0", map[string]string{"DNS_TIMEOUT_SECONDS": "0"}, false},
 		{"vault without an address", map[string]string{"KEY_DECRYPT": "vault"}, false},
-		{"no Redis", map[string]string{"REDIS_ADDR": ""}, false},
+		{"memory by default, no Redis needed", map[string]string{"DNS_FAILURE_STORE": "memory"}, true},
+		{"redis without an address", map[string]string{"DNS_FAILURE_STORE": "redis", "REDIS_KEY_PREFIX": "arc:"}, false},
+		{"redis", map[string]string{"DNS_FAILURE_STORE": "redis", "REDIS_ADDR": "r:6379", "REDIS_KEY_PREFIX": "arc:"}, true},
+		{"unknown store", map[string]string{"DNS_FAILURE_STORE": "file"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for k, v := range base {

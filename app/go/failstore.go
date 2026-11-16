@@ -90,29 +90,100 @@ func (m *memoryFails) Clear(_ context.Context, name string) error {
 	return nil
 }
 
+const (
+	// redisTimeout bounds one Redis call. It is not the message's deadline:
+	// a lookup that ran into that deadline must still be recorded.
+	redisTimeout = 300 * time.Millisecond
+	// redisPause is how long Redis is left alone after it failed, so a
+	// Redis outage costs a message at most one redisTimeout.
+	redisPause = 30 * time.Second
+	// clearEvery is the least time between two deletes of one name, so a
+	// healthy chain does not write to Redis on every lookup.
+	clearEvery = 5 * time.Minute
+)
+
 // sharedFails is Redis with the process's memory behind it for the time
-// Redis is down.
+// Redis is down. Deletes go in the background and at most once per name per
+// clearEvery; a failure of the name lets the next one through.
 type sharedFails struct {
 	redis failStore
 	local *memoryFails
+	now   func() time.Time
+
+	mu         sync.Mutex
+	pauseUntil time.Time
+	cleared    map[string]time.Time
+	bg         sync.WaitGroup
 }
 
-func (s *sharedFails) FirstFailure(ctx context.Context, name string, now time.Time) (time.Time, error) {
+func newSharedFails(r failStore, local *memoryFails) *sharedFails {
+	return &sharedFails{redis: r, local: local, now: time.Now, cleared: map[string]time.Time{}}
+}
+
+func (s *sharedFails) paused() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.now().Before(s.pauseUntil)
+}
+
+func (s *sharedFails) failed(err error) {
+	redisErrors.Inc()
+	slog.Warn("arc: Redis does not answer, DNS failures are counted in this process for a while", "pause", redisPause.String(), "err", err)
+	s.mu.Lock()
+	s.pauseUntil = s.now().Add(redisPause)
+	s.mu.Unlock()
+}
+
+func (s *sharedFails) FirstFailure(_ context.Context, name string, now time.Time) (time.Time, error) {
+	s.mu.Lock()
+	delete(s.cleared, name)
+	s.mu.Unlock()
+	if s.paused() {
+		return s.local.FirstFailure(context.Background(), name, now)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), redisTimeout)
+	defer cancel()
 	first, err := s.redis.FirstFailure(ctx, name, now)
 	if err != nil {
-		redisErrors.Inc()
-		slog.Warn("arc: Redis does not answer, the DNS failure is counted in this process", "name", name, "err", err)
+		s.failed(err)
 		return s.local.FirstFailure(ctx, name, now)
 	}
 	return first, nil
 }
 
-func (s *sharedFails) Clear(ctx context.Context, name string) error {
-	_ = s.local.Clear(ctx, name)
-	if err := s.redis.Clear(ctx, name); err != nil {
-		redisErrors.Inc()
-		return err
+func (s *sharedFails) Clear(_ context.Context, name string) error {
+	_ = s.local.Clear(context.Background(), name)
+	s.mu.Lock()
+	now := s.now()
+	if last, ok := s.cleared[name]; ok && now.Sub(last) < clearEvery {
+		s.mu.Unlock()
+		return nil
 	}
+	if len(s.cleared) >= maxFailingNames {
+		for n, t := range s.cleared {
+			if now.Sub(t) >= clearEvery {
+				delete(s.cleared, n)
+			}
+		}
+		if len(s.cleared) >= maxFailingNames {
+			s.mu.Unlock()
+			return nil
+		}
+	}
+	s.cleared[name] = now
+	s.mu.Unlock()
+	if s.paused() {
+		return nil
+	}
+	s.bg.Add(1)
+	go func() {
+		defer s.bg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), redisTimeout)
+		defer cancel()
+		if err := s.redis.Clear(ctx, name); err != nil {
+			s.failed(err)
+		}
+	}()
 	return nil
 }
 

@@ -72,6 +72,9 @@ spec:
               value: {{ .Values.dnsTimeoutSeconds | quote }}
             - name: DNS_TEMPFAIL_GRACE_SECONDS
               value: {{ .Values.dnsTempfailGraceSeconds | quote }}
+            - name: DNS_FAILURE_STORE
+              value: {{ .Values.dnsFailureStore | quote }}
+            {{- if eq .Values.dnsFailureStore "redis" }}
             {{- if .Values.redis.sentinel.addrs }}
             - name: REDIS_SENTINEL_ADDRS
               value: {{ .Values.redis.sentinel.addrs | quote }}
@@ -103,6 +106,7 @@ spec:
               value: {{ .Values.redis.db | quote }}
             - name: REDIS_KEY_PREFIX
               value: {{ required "redis.keyPrefix is required" .Values.redis.keyPrefix | quote }}
+            {{- end }}
             - name: KEY_DECRYPT
               value: {{ .Values.keyDecrypt | quote }}
             - name: KEY_CACHE_SIZE

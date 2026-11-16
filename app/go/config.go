@@ -65,7 +65,9 @@ type config struct {
 	// dnsGrace is DNS_TEMPFAIL_GRACE_SECONDS: past it a name that keeps
 	// failing is a failed signature, not one more retry.
 	dnsGrace time.Duration
-	redis    redisConfig
+	// failStore is DNS_FAILURE_STORE: memory (this process) or redis.
+	failStore string
+	redis     redisConfig
 }
 
 // defaultQueries read the seal domain's newest row with the ARC selector,
@@ -85,7 +87,14 @@ func positive(name string, def int) (int, error) {
 	return v, nil
 }
 
-// redisConfig is where the first failure of each DNS name is kept.
+// Where the first DNS failure of each key name is kept (DNS_FAILURE_STORE).
+const (
+	failStoreMemory = "memory"
+	failStoreRedis  = "redis"
+)
+
+// redisConfig is where the first failure of each DNS name is kept with
+// DNS_FAILURE_STORE=redis.
 type redisConfig struct {
 	addr             string
 	sentinelAddrs    []string
@@ -173,8 +182,16 @@ func loadConfig() (config, error) {
 	if c.authservID == "" || strings.ContainsAny(c.authservID, " \t;") {
 		return c, fmt.Errorf("config: AUTHSERV_ID %q: the MX's authserv-id is required", c.authservID)
 	}
-	if c.redis, err = loadRedis(); err != nil {
-		return c, err
+	c.failStore = strings.ToLower(strings.TrimSpace(os.Getenv("DNS_FAILURE_STORE")))
+	switch c.failStore {
+	case "", failStoreMemory:
+		c.failStore = failStoreMemory
+	case failStoreRedis:
+		if c.redis, err = loadRedis(); err != nil {
+			return c, err
+		}
+	default:
+		return c, fmt.Errorf("config: DNS_FAILURE_STORE %q: memory or redis", c.failStore)
 	}
 	def, ok := defaultQueries[c.dbDriver]
 	if !ok {

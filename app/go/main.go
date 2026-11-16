@@ -140,16 +140,17 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("milter: listen %s: %w", cfg.listenAddr, err)
 	}
-	rdb := newRedisClient(cfg.redis)
-	defer func() { _ = rdb.Close() }()
-	fails := &sharedFails{
-		redis: &redisFails{rdb: rdb, prefix: cfg.redis.prefix, ttl: cfg.dnsGrace + 24*time.Hour},
-		local: newMemoryFails(cfg.dnsGrace),
+	var fails failStore = newMemoryFails(cfg.dnsGrace)
+	if cfg.failStore == failStoreRedis {
+		rdb := newRedisClient(cfg.redis)
+		defer func() { _ = rdb.Close() }()
+		fails = newSharedFails(&redisFails{rdb: rdb, prefix: cfg.redis.prefix, ttl: cfg.dnsGrace + 24*time.Hour},
+			newMemoryFails(cfg.dnsGrace))
 	}
 	srv := newMilterServer(cfg, cache, newDNSKeys(net.DefaultResolver, cfg.dnsGrace, fails))
 	slog.Info("arc-milter: listening", "addr", cfg.listenAddr, "db", cfg.dbDriver, "decrypt", cfg.decrypt,
 		"seal_domain", cfg.sealDomain, "selector", cfg.selector, "authserv_id", cfg.authservID,
-		"dns_timeout", cfg.dnsTimeout.String(), "dns_grace", cfg.dnsGrace.String(), "db_max_open", cfg.dbMaxOpen, "read_timeout", cfg.milterRead.String(),
+		"dns_timeout", cfg.dnsTimeout.String(), "dns_grace", cfg.dnsGrace.String(), "dns_failure_store", cfg.failStore, "db_max_open", cfg.dbMaxOpen, "read_timeout", cfg.milterRead.String(),
 		"cache_size", cfg.cacheSize, "cache_ttl", cfg.cacheTTL.String(), "miss_ttl", cfg.cacheMissTTL.String())
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
