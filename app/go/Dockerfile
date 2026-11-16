@@ -12,8 +12,9 @@ COPY *.go ./
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -ldflags="-s -w" -trimpath -o arc-milter .
 
-FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
-
+# Named so CI can rebuild it without its layer cache: a cached apk upgrade
+# keeps the packages of its first build until the base digest moves.
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS runtime
 # hadolint ignore=DL3018,DL3019
 RUN apk upgrade --no-cache && apk add --no-cache ca-certificates
 
