@@ -41,6 +41,8 @@ sealDomain: ""
 
 # The ARC key's selector: its own row in the dkim table beside the domain's
 # DKIM row, and its own TXT record at <selector>._domainkey.<sealDomain>.
+# arc or arc-<label> (arc-2027 after a rotation): dkim-milter leaves exactly
+# these out of its key query; any other is refused at start.
 # The key must be RSA: ARC defines rsa-sha256 only.
 selector: arc
 

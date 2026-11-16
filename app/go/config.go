@@ -32,8 +32,10 @@ const (
 // validDomain is a domain name: labels of letters, digits and hyphens.
 var validDomain = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
-// validSelector is one DNS label.
-var validSelector = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+// validSelector is an ARC selector: arc, or one DNS label starting with
+// arc-. dkim-milter leaves exactly these out of its key query, so an ARC key
+// in the shared table never signs DKIM.
+var validSelector = regexp.MustCompile(`^arc(-[a-z0-9]([a-z0-9-]*[a-z0-9])?)?$`)
 
 type config struct {
 	listenAddr  string
@@ -177,7 +179,7 @@ func loadConfig() (config, error) {
 		return c, fmt.Errorf("config: SEAL_DOMAIN %q: a domain name is required", c.sealDomain)
 	}
 	if !validSelector.MatchString(c.selector) {
-		return c, fmt.Errorf("config: ARC_SELECTOR %q: one DNS label", c.selector)
+		return c, fmt.Errorf("config: ARC_SELECTOR %q: arc or arc-<label>, the selectors dkim-milter leaves out", c.selector)
 	}
 	if c.authservID == "" || strings.ContainsAny(c.authservID, " \t;") {
 		return c, fmt.Errorf("config: AUTHSERV_ID %q: the MX's authserv-id is required", c.authservID)
