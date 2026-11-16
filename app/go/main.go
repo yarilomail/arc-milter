@@ -1,0 +1,168 @@
+// Copyright (c) 2026 The arc-milter Authors. All rights reserved.
+// Use of this source code is governed by a GNU AGPLv3 style
+// license that can be found in the LICENSE file.
+
+// arc-milter is a Postfix milter that adds an ARC set (RFC 8617) to each
+// forwarded message, sealed with the forwarder's own key. Settings are
+// environment variables, listed in README.md.
+package main
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"sync/atomic"
+	"syscall"
+	"time"
+
+	"github.com/0kaba0hub/go-milter"
+	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/jackc/pgx/v5/stdlib"
+)
+
+func main() {
+	level := slog.LevelInfo
+	if strings.ToLower(os.Getenv("LOG_LEVEL")) == "debug" {
+		level = slog.LevelDebug
+	}
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
+	if err := run(); err != nil {
+		slog.Error("arc-milter: exiting", "err", err)
+		os.Exit(1)
+	}
+}
+
+func openDB(cfg config) (*sql.DB, error) {
+	driver := map[string]string{"postgres": "pgx", "mysql": "mysql"}[cfg.dbDriver]
+	db, err := sql.Open(driver, cfg.dbDSN)
+	if err != nil {
+		return nil, fmt.Errorf("db: open %s: %w", cfg.dbDriver, err)
+	}
+	db.SetMaxOpenConns(cfg.dbMaxOpen)
+	db.SetMaxIdleConns(cfg.dbMaxOpen)
+	db.SetConnMaxIdleTime(5 * time.Minute)
+	return db, nil
+}
+
+func newDecryptor(cfg config) (decryptor, error) {
+	if cfg.decrypt == "none" {
+		slog.Warn("keys: KEY_DECRYPT=none, the database holds private keys in the clear")
+		return plainKeys{}, nil
+	}
+	return newVaultTransit(cfg.vault)
+}
+
+// checker is a decryptor that can say whether it is reachable.
+type checker interface{ Check(context.Context) error }
+
+// readyProbeDomain is looked up by waitReady: no row has it, so the key
+// query answers with no row once it runs.
+const readyProbeDomain = "readiness-probe.invalid"
+
+// waitReady sets ready once the key query runs and, with Vault, the token
+// may decrypt with the Transit key; keys load on demand after that.
+func waitReady(ctx context.Context, fetch func(context.Context, string) (row, bool, error), dec decryptor, ready *atomic.Bool) {
+	backoff := time.Second
+	for {
+		_, _, err := fetch(ctx, readyProbeDomain)
+		if c, ok := dec.(checker); ok && err == nil {
+			err = c.Check(ctx)
+		}
+		if err == nil {
+			ready.Store(true)
+			slog.Info("arc-milter: ready, keys load on demand")
+			return
+		}
+		slog.Error("arc-milter: not ready", "err", err, "retry_in", backoff.String())
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		backoff = min(backoff*2, 30*time.Second)
+	}
+}
+
+// newMilterServer is the milter listener's server: one session per
+// connection, adding only the three ARC fields.
+func newMilterServer(cfg config, cache *keyCache, dns keyResolver) *milter.Server {
+	return &milter.Server{
+		NewMilter: func() milter.Milter {
+			return &session{keys: cache, dns: dns, sealDomain: cfg.sealDomain, authservID: cfg.authservID,
+				dnsTimeout: cfg.dnsTimeout, now: time.Now}
+		},
+		Actions:  milter.OptAddHeader,
+		Protocol: milter.OptNoConnect | milter.OptNoHelo | milter.OptNoRcptTo,
+		// Bounds a connection that stops talking; the library also refuses
+		// packets over 1 MiB, so a peer cannot make it allocate more.
+		ReadTimeout:  cfg.milterRead,
+		WriteTimeout: cfg.milterWrite,
+	}
+}
+
+func run() error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	db, err := openDB(cfg)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+	dec, err := newDecryptor(cfg)
+	if err != nil {
+		return err
+	}
+	fetch := sqlRow(db, cfg.query, cfg.selector)
+	cache := newKeyCache(fetch, dec, cfg.cacheSize, cfg.cacheTTL, cfg.cacheMissTTL)
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	var ready atomic.Bool
+	go waitReady(ctx, fetch, dec, &ready)
+
+	hs := &http.Server{Addr: cfg.metricsAddr, Handler: metricsMux(ready.Load), ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		if err := hs.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("arc-milter: metrics listener", "err", err)
+		}
+	}()
+
+	ln, err := new(net.ListenConfig).Listen(ctx, "tcp", cfg.listenAddr)
+	if err != nil {
+		return fmt.Errorf("milter: listen %s: %w", cfg.listenAddr, err)
+	}
+	var fails failStore = newMemoryFails(cfg.dnsGrace)
+	if cfg.failStore == failStoreRedis {
+		rdb := newRedisClient(cfg.redis)
+		defer func() { _ = rdb.Close() }()
+		fails = newSharedFails(&redisFails{rdb: rdb, prefix: cfg.redis.prefix, ttl: cfg.dnsGrace + 24*time.Hour},
+			newMemoryFails(cfg.dnsGrace))
+	}
+	srv := newMilterServer(cfg, cache, newDNSKeys(net.DefaultResolver, cfg.dnsGrace, fails))
+	slog.Info("arc-milter: listening", "addr", cfg.listenAddr, "db", cfg.dbDriver, "decrypt", cfg.decrypt,
+		"seal_domain", cfg.sealDomain, "selector", cfg.selector, "authserv_id", cfg.authservID,
+		"dns_timeout", cfg.dnsTimeout.String(), "dns_grace", cfg.dnsGrace.String(), "dns_failure_store", cfg.failStore, "db_max_open", cfg.dbMaxOpen, "read_timeout", cfg.milterRead.String(),
+		"cache_size", cfg.cacheSize, "cache_ttl", cfg.cacheTTL.String(), "miss_ttl", cfg.cacheMissTTL.String())
+	errc := make(chan error, 1)
+	go func() { errc <- srv.Serve(ln) }()
+	select {
+	case <-ctx.Done():
+		slog.Info("arc-milter: shutting down")
+		_ = srv.Close()
+		shut, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = hs.Shutdown(shut)
+		return nil
+	case err := <-errc:
+		return fmt.Errorf("milter: serve: %w", err)
+	}
+}
