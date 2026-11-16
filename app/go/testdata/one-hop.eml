@@ -1,0 +1,30 @@
+ARC-Seal: i=1; cv=none; a=rsa-sha256; d=a.example; s=s1; t=1794787200;
+ b=AzBHu4vG4XNnKaNfuRTDqmE8TObimATbQjk2ckZPcDe2YcOE91046QFtJNsa6DbEmfNiN
+ ILP//P3jMTfrrGD0x+Q9UyfpRqswlqRQCXUcaTZNysHwdYvuh0JUGb1sOA8YBmEUADOUiHu
+ QAE29DxEs+uUIg1opfKnrQdM6vwXLz8zgE49So2/xPm0xMfkkRrL+T7GMXRuKoRhbU2JOLT
+ U2B8vcAWKhxqm28L2BPd7OBIjgpZEPVTnezHal8jJ3WQV5ZZjscl37NjrBZ2plNGxCJ6qb2
+ 1Y/L0tbtXKpkNDG7c9uQmedsOjwX1BZwIqu2bXcq4yhNdKYDf/f+Y77RMIiw==
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=a.example;
+ s=s1; t=1794787200; h=from : to : subject : date : message-id :
+ mime-version : content-type : from;
+ bh=ZhLZyUwtqNJUThGINI/HuvcX//8brN5RkpoWZASkH/w=;
+ b=L7BVw1k7dr+JiSAzbj1DtpiUV0qLWAKr5OoT3NYZnMdW5w9LQD4Y5OsrnkLPkVhcH69fR
+ MgyXqgozFgQ4pNzl5Pb55kMo0Rp2QfhVDXRTfZMzpV5BtUaEwI6oh4offGIC4RKsIW9Z7bD
+ wvFsWUhtdBvRt7V+qbAFHic8503P0XmH9yOSbTMg7kSVE3drHZC9cqWMShT3rq2Y14SopXw
+ FG0hL+GQz/HiheHeeQtLbp99rk2KRvICEa7q5u2U5dCTqhOBiak1gD4fnPL1+B9EevUAQ2Y
+ bAbv4T71nzm1W98yp2upyUkoe/R+hGMzFtNBCZHxqajXjfjcmSKWS8+j78zg==
+ARC-Authentication-Results: i=1; mx.a.example;
+ spf=pass smtp.mailfrom=alice@example.org
+Authentication-Results: mx.a.example; spf=pass smtp.mailfrom=alice@example.org
+From: Alice <alice@example.org>
+To: list@a.example
+Subject: arc fixture
+Date: Mon, 16 Nov 2026 12:00:00 +0000
+Message-ID: <arc-1@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain
+
+line one
+line  two 
+
+
