@@ -1,7 +1,7 @@
 # The yarilo stand: arc-milter on relay-fwd-out after dkim-milter-fwd. The key
 # is the row with selector arc for fwd.d00001.test in yarilo-postfix's MySQL
-# table dkim, Vault Transit ciphertext like dkim-milter's; Vault in namespace
-# vault over TLS from the stand's internal CA. Installed with helm upgrade in
+# table dkim, encrypted with the Transit key arc, never dkim-milter's; Vault in
+# namespace vault over TLS from the stand's internal CA. Installed with helm upgrade in
 # yarilo-relay; the DSN Secret is dkim-milter's (docs-internal
 # relay-milters-stand.md). The stand runs what develop built last.
 image:
@@ -25,9 +25,11 @@ keyDecrypt: vault
 
 vault:
   addr: "https://vault.vault.svc:8200"
-  # dkim-milter's role, bound to the ServiceAccount arc-milter too
-  # (seconddns/k8s_vault scripts/setup-dkim-transit.sh).
-  role: dkim-milter
+  # Its own role and key: the role decrypts with arc only, never with dkim,
+  # which holds every client domain's DKIM key (seconddns/k8s_vault
+  # scripts/setup-dkim-transit.sh, MILTER=arc).
+  role: arc-milter
+  transitKey: arc
   caCertSecret: arc-milter-vault-ca
   caCertificate:
     issuerRef:
