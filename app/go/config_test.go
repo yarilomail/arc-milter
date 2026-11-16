@@ -75,6 +75,9 @@ func TestChartDefaultsMatchTheCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if values["vault.transitKey"] != defaultTransitKey || defaultTransitKey == "dkim" {
+		t.Errorf("vault.transitKey = %q in values.yaml, %q in the code; want arc-milter's own key", values["vault.transitKey"], defaultTransitKey)
+	}
 	if values["selector"] != defaultSelector {
 		t.Errorf("selector = %q in values.yaml, %q in the code", values["selector"], defaultSelector)
 	}

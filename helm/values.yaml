@@ -126,7 +126,9 @@ vault:
   role: ""
   authPath: kubernetes
   transitPath: transit
-  transitKey: dkim
+  # Its own key, never dkim-milter's dkim: the role this release logs in with
+  # may decrypt with this key alone.
+  transitKey: arc
   # Secret with ca.crt when Vault's certificate is not from a public CA.
   caCertSecret: ""
   # With an issuer named, the chart makes a Certificate that writes
