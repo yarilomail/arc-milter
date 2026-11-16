@@ -18,6 +18,9 @@ const (
 	defaultCacheMissTTL = 60
 	defaultDBMaxOpen    = 4
 	defaultDNSTimeout   = 10
+	// defaultDNSGrace is how long a key name may keep failing temporarily
+	// before it counts as failed: 4 hours, well inside Postfix's 5-day queue.
+	defaultDNSGrace = 14400
 	// Postfix keeps one milter connection for a whole SMTP session and is
 	// silent on it while the client sends, so the read timeout outlasts any
 	// session; it only frees connections that nobody will use again.
@@ -59,6 +62,9 @@ type config struct {
 	// adds, copied into the AAR.
 	authservID string
 	dnsTimeout time.Duration
+	// dnsGrace is DNS_TEMPFAIL_GRACE_SECONDS: past it a name that keeps
+	// failing is a failed signature, not one more retry.
+	dnsGrace time.Duration
 }
 
 // defaultQueries read the seal domain's newest row with the ARC selector,
@@ -140,6 +146,9 @@ func loadConfig() (config, error) {
 		return c, err
 	}
 	if c.dnsTimeout, err = seconds("DNS_TIMEOUT_SECONDS", defaultDNSTimeout); err != nil {
+		return c, err
+	}
+	if c.dnsGrace, err = seconds("DNS_TEMPFAIL_GRACE_SECONDS", defaultDNSGrace); err != nil {
 		return c, err
 	}
 	if !validDomain.MatchString(c.sealDomain) {

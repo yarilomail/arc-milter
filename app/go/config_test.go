@@ -87,6 +87,7 @@ func TestChartDefaultsMatchTheCode(t *testing.T) {
 		{"keyCache.missTtlSeconds", "KEY_CACHE_MISS_TTL_SECONDS", defaultCacheMissTTL},
 		{"db.maxOpenConns", "DB_MAX_OPEN_CONNS", defaultDBMaxOpen},
 		{"dnsTimeoutSeconds", "DNS_TIMEOUT_SECONDS", defaultDNSTimeout},
+		{"dnsTempfailGraceSeconds", "DNS_TEMPFAIL_GRACE_SECONDS", defaultDNSGrace},
 		{"milterReadTimeoutSeconds", "MILTER_READ_TIMEOUT_SECONDS", defaultMilterRead},
 		{"milterWriteTimeoutSeconds", "MILTER_WRITE_TIMEOUT_SECONDS", defaultMilterWrite},
 	} {

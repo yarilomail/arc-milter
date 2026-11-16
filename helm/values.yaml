@@ -54,6 +54,12 @@ authservId: ""
 # name tempfails the message: a cv=fail seal would spoil the chain for good.
 dnsTimeoutSeconds: 10
 
+# How long a key name may keep failing so before it counts as a failed
+# signature (RFC 8617 5.2.1 allows it): the message is then sealed cv=fail
+# instead of waiting in the queue to the end of its life. Kept per name in
+# this process, from its first failure; any answer clears it.
+dnsTempfailGraceSeconds: 14400
+
 db:
   # postgres or mysql
   driver: postgres

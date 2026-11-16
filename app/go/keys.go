@@ -279,14 +279,20 @@ func parsePrivateKey(b []byte) (*rsa.PrivateKey, error) {
 	} else if raw, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(string(b)), "")); err == nil {
 		der = raw
 	}
-	if k, err := x509.ParsePKCS8PrivateKey(der); err == nil {
-		if r, ok := k.(*rsa.PrivateKey); ok {
-			return r, nil
+	var k *rsa.PrivateKey
+	if p8, err := x509.ParsePKCS8PrivateKey(der); err == nil {
+		r, ok := p8.(*rsa.PrivateKey)
+		if !ok {
+			return nil, errors.New("keys: the key is not RSA, and ARC signs with rsa-sha256 only")
 		}
-		return nil, errors.New("keys: the key is not RSA, and ARC signs with rsa-sha256 only")
+		k = r
+	} else if p1, err := x509.ParsePKCS1PrivateKey(der); err == nil {
+		k = p1
+	} else {
+		return nil, errors.New("keys: not a PKCS#8 or PKCS#1 private key")
 	}
-	if k, err := x509.ParsePKCS1PrivateKey(der); err == nil {
-		return k, nil
+	if k.N.BitLen() < minRSABits {
+		return nil, fmt.Errorf("keys: %d bits, under the %d a verifier accepts (RFC 8301)", k.N.BitLen(), minRSABits)
 	}
-	return nil, errors.New("keys: not a PKCS#8 or PKCS#1 private key")
+	return k, nil
 }

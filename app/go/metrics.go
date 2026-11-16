@@ -10,13 +10,16 @@ import (
 
 var (
 	sealResults = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "arc_messages_total", Help: "Messages seen, by result: sealed, chain_failed (an earlier seal says cv=fail), instance_limit, no_key, tempfail_key, tempfail_dns, error.",
+		Name: "arc_messages_total", Help: "Messages seen, by result: sealed, chain_failed (an earlier seal says cv=fail), instance_limit, simple_unverifiable (a simple-canonicalized AMS that does not check here), no_key, tempfail_key, tempfail_dns, error.",
 	}, []string{"result"})
 	chainResults = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "arc_chain_total", Help: "Sealed messages, by the cv= this hop found: none, pass, fail.",
 	}, []string{"cv"})
 	dnsLookupErrors = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "arc_dns_temporary_errors_total", Help: "Key lookups that failed for a reason other than a missing name.",
+	})
+	dnsGivenUp = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "arc_dns_given_up_total", Help: "Key lookups taken as failed because the name kept failing past DNS_TEMPFAIL_GRACE_SECONDS.",
 	})
 	keysLoaded = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "arc_keys_loaded", Help: "Domains with a key in the cache.",

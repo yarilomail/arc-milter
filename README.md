@@ -14,12 +14,12 @@ The MX does not seal. It only needs a clean `Authentication-Results` with this A
 
 For each message, at the end of its headers:
 
-1. It collects the ARC sets the message came with. When the newest `ARC-Seal` says `cv=fail`, the chain ended at that hop (RFC 8617 5.1 step 2): nothing is added. A chain already at instance 50 gets nothing either (4.2.1).
+1. It collects the ARC sets the message came with. When the newest `ARC-Seal` says `cv=fail`, the chain ended at that hop (RFC 8617 5.1 step 2): nothing is added. The new instance is one above the highest `i=` any ARC field names, read past a broken field too, so it never repeats a number already there; at 50 nothing is added (4.2.1).
 2. It reads the key (below). A message that will not be sealed is accepted here, and Postfix sends this milter no body for it.
 
 At the end of the message:
 
-3. It validates the chain (5.2): sets 1..n, each with exactly one `ARC-Authentication-Results`, `ARC-Message-Signature` and `ARC-Seal`; the newest AMS against the body and fields; every AS from n down to 1, with `cv=none` on the first and `cv=pass` on the others. The result is this hop's `cv`: `none` without a chain, `pass`, or `fail`.
+3. It validates the chain (5.2): sets 1..n, each with exactly one `ARC-Authentication-Results`, `ARC-Message-Signature` and `ARC-Seal`; the newest AMS against the body and fields; every AS from n down to 1, with `cv=none` on the first and `cv=pass` on the others. A key under 1024 bits fails its signature (RFC 8301). The result is this hop's `cv`: `none` without a chain, `pass`, or `fail`.
 4. It adds instance n+1 on top of the header, in this order from the top: `ARC-Seal`, `ARC-Message-Signature`, `ARC-Authentication-Results`.
    - The AAR is `i=n+1;` and the first `Authentication-Results` whose authserv-id is `AUTHSERV_ID`, copied as it stands. Without one it says `<authserv-id>; none`.
    - The AMS is `rsa-sha256`, `relaxed/relaxed`, over `From` (once more than it appears, so a `From` added later breaks it), `Reply-To`, `Subject`, `Date`, `To`, `Cc`, `Message-ID`, `In-Reply-To`, `References`, `MIME-Version`, `Content-Type`, `Content-Transfer-Encoding`, `List-Id`, `List-Unsubscribe`, `List-Unsubscribe-Post` and `DKIM-Signature`, each as many times as the message has it.
@@ -35,6 +35,8 @@ The body is streamed through the hashes as it arrives and never held.
 | The key was never read; the database or Vault is down | tempfail at the end of the headers: the relay keeps the message and retries |
 | The database answers and has no row for `SEAL_DOMAIN` with `ARC_SELECTOR` | accepted unsealed, one log line and `arc_messages_total{result="no_key"}`: that is configuration, not an outage |
 | A key lookup in DNS fails for any reason but a name that does not exist (a timeout, SERVFAIL) | tempfail at the end of the message. A `cv=fail` seal over a lookup that may answer in a minute would spoil the chain for good |
+| The same key name has kept failing so for `DNS_TEMPFAIL_GRACE_SECONDS` (4 hours) since its first failure | that signature counts as failed (RFC 8617 5.2.1 allows it) and the message is sealed `cv=fail`, instead of waiting in the queue to the end of its life when it would go out without this milter. The first failure is kept per name in the process; any answer from DNS clears it, and so does a restart |
+| The newest AMS uses `simple` header canonicalization and does not check | accepted unsealed, `arc_messages_total{result="simple_unverifiable"}`: the MTA hands the milter fields without the whitespace after the colon, so the signed bytes may not be the rebuilt ones, and a `cv=fail` on a sound chain could not be undone after |
 | A key name does not exist, or the key is revoked (`p=` empty) | that signature fails, and the chain with it |
 
 Every key lookup of one message shares one deadline, `DNS_TIMEOUT_SECONDS`: slow lookups cannot hold a message once per signature.
@@ -79,6 +81,7 @@ The milter protocol version 2 this milter speaks has Postfix drop the space afte
 | `ARC_SELECTOR` | `arc` | `s=`, and the key row's selector |
 | `AUTHSERV_ID` | --- (required) | the authserv-id of this ADMD's `Authentication-Results`, copied into the AAR |
 | `DNS_TIMEOUT_SECONDS` | `10` | one deadline for the key lookups of a message |
+| `DNS_TEMPFAIL_GRACE_SECONDS` | `14400` | how long a key name may keep failing temporarily before its signature counts as failed |
 | `LISTEN_ADDR` | `0.0.0.0:8893` | milter listener |
 | `METRICS_ADDR` | `0.0.0.0:8081` | `/healthz`, `/readyz`, `/metrics` |
 | `MILTER_READ_TIMEOUT_SECONDS` / `MILTER_WRITE_TIMEOUT_SECONDS` | `3600` / `60` | a silent connection is closed after the first; a reply Postfix does not take after the second |
@@ -98,9 +101,10 @@ The milter protocol version 2 this milter speaks has Postfix drop the space afte
 
 | Metric | What |
 |:---|:---|
-| `arc_messages_total{result}` | `sealed`, `chain_failed` (the newest seal says `cv=fail`), `instance_limit`, `no_key`, `tempfail_key`, `tempfail_dns`, `error` |
+| `arc_messages_total{result}` | `sealed`, `chain_failed` (the newest seal says `cv=fail`), `instance_limit`, `simple_unverifiable`, `no_key`, `tempfail_key`, `tempfail_dns`, `error` |
 | `arc_chain_total{cv}` | sealed messages by the `cv` this hop found: `none`, `pass`, `fail` |
 | `arc_dns_temporary_errors_total` | key lookups that failed for a reason other than a missing name |
+| `arc_dns_given_up_total` | of those, the ones taken as failed past `DNS_TEMPFAIL_GRACE_SECONDS` |
 | `arc_keys_loaded`, `arc_key_cache_lookups_total{result}`, `arc_key_fetch_errors_total{stage}` | the key cache, as dkim-milter's |
 
 ## Helm

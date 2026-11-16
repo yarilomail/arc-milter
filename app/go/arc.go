@@ -18,6 +18,9 @@ import (
 // maxInstance is the highest ARC instance (RFC 8617 4.2.1).
 const maxInstance = 50
 
+// minRSABits is the smallest RSA key a signature may use (RFC 8301 3.2).
+const minRSABits = 1024
+
 const (
 	hdrAAR = "ARC-Authentication-Results"
 	hdrAMS = "ARC-Message-Signature"
@@ -34,6 +37,13 @@ const (
 // errTempDNS is a key lookup that may answer later: the message is retried,
 // never sealed cv=fail, which would spoil the chain for good.
 var errTempDNS = errors.New("arc: temporary DNS failure")
+
+// errSimpleUnverifiable is a newest AMS with simple header canonicalization
+// that does not check. The MTA hands this milter the fields without the
+// whitespace after the colon, so the bytes it signed may not be the ones
+// rebuilt here: the chain may be sound, and a cv=fail seal on it could not
+// be undone by anyone after. Such a message is left unsealed.
+var errSimpleUnverifiable = errors.New("arc: a simple-canonicalized AMS does not check on the rebuilt fields")
 
 // keyResolver returns the public key a selector publishes for a domain;
 // a missing or revoked key is a permanent error, errTempDNS a temporary one.
@@ -52,6 +62,9 @@ type arcSet struct {
 type chain struct {
 	sets map[int]*arcSet
 	n    int // highest instance, 0 for none
+	// highest is the highest i= of any ARC field that names one, read past a
+	// broken field too, so a new set never repeats a number already there.
+	highest int
 	// broken says the fields do not form sets 1..n (RFC 8617 5.2 step 2).
 	broken string
 }
@@ -82,9 +95,30 @@ func aarInstance(f field) (int, error) {
 	return i, nil
 }
 
+// looseInstance reads an ARC field's i= without judging it, 0 when there is
+// no number.
+func looseInstance(f field) int {
+	head := relaxedValue(f.value)
+	for _, part := range strings.Split(head, ";") {
+		k, v, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if ok && strings.TrimSpace(k) == "i" {
+			if i, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && i > 0 {
+				return i
+			}
+			return 0
+		}
+	}
+	return 0
+}
+
 // collect gathers the ARC fields of a header block.
 func collect(fields []field) chain {
 	c := chain{sets: map[int]*arcSet{}}
+	for _, f := range fields {
+		if strings.EqualFold(f.name, hdrAAR) || strings.EqualFold(f.name, hdrAMS) || strings.EqualFold(f.name, hdrAS) {
+			c.highest = max(c.highest, looseInstance(f))
+		}
+	}
 	fail := func(why string) chain {
 		c.broken = why
 		return c
@@ -161,6 +195,9 @@ func (c chain) validate(ctx context.Context, fields []field, bodyFor func(relaxe
 		return cvFail, fmt.Sprintf("ARC-Seal i=%d says cv=fail", c.n), nil
 	}
 	if why, err := verifyAMS(ctx, fields, c.sets[c.n], bodyFor, keys); err != nil || why != "" {
+		if err == nil && strings.HasPrefix(why, "AMS i=") && strings.HasSuffix(why, "header bytes do not check") {
+			return "", why, errSimpleUnverifiable
+		}
 		return cvFail, why, err
 	}
 	for i := c.n; i >= 1; i-- {
@@ -225,6 +262,9 @@ func verifyRSA(ctx context.Context, keys keyResolver, t tags, data string) (stri
 	if err != nil {
 		return fmt.Sprintf("key %s._domainkey.%s: %v", t["s"], t["d"], err), nil
 	}
+	if pub.N.BitLen() < minRSABits {
+		return fmt.Sprintf("key %s._domainkey.%s has %d bits, under %d (RFC 8301)", t["s"], t["d"], pub.N.BitLen(), minRSABits), nil
+	}
 	sum := sha256.Sum256([]byte(data))
 	if err := rsa.VerifyPKCS1v15(pub, crypto.SHA256, sum[:], sig); err != nil {
 		return fmt.Sprintf("signature by %s._domainkey.%s does not verify", t["s"], t["d"]), nil
@@ -259,7 +299,11 @@ func verifyAMS(ctx context.Context, fields []field, s *arcSet, bodyFor func(bool
 	}
 	data := selectHeaders(fields, names, hRelaxed) +
 		strings.TrimSuffix(canonHeader(field{s.ams.name, withoutB(s.ams.value)}, hRelaxed), "\r\n")
-	return verifyRSA(ctx, keys, t, data)
+	why, err := verifyRSA(ctx, keys, t, data)
+	if !hRelaxed && err == nil && strings.HasSuffix(why, "does not verify") {
+		return fmt.Sprintf("AMS i=%s with simple header canonicalization: header bytes do not check", t["i"]), nil
+	}
+	return why, err
 }
 
 // sealInput is what ARC-Seal i=upto signs: every set from 1 up to it, AAR,

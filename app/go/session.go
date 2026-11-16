@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -85,9 +86,9 @@ func (s *session) Headers(_ textproto.MIMEHeader, m *milter.Modifier) (milter.Re
 		sealResults.WithLabelValues("chain_failed").Inc()
 		log.Info("arc: not sealed, the last ARC-Seal says cv=fail", "instance", s.chain.n)
 		return milter.RespAccept, nil
-	case s.chain.n >= maxInstance:
+	case max(s.chain.n, s.chain.highest) >= maxInstance:
 		sealResults.WithLabelValues("instance_limit").Inc()
-		log.Warn("arc: not sealed, the chain is at its last instance", "instance", s.chain.n)
+		log.Warn("arc: not sealed, the chain is at its last instance", "instance", max(s.chain.n, s.chain.highest))
 		return milter.RespAccept, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
@@ -167,6 +168,11 @@ func (s *session) Body(m *milter.Modifier) (milter.Response, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.dnsTimeout)
 	cv, why, err := s.chain.validate(ctx, s.fields, bodyFor, s.dns)
 	cancel()
+	if errors.Is(err, errSimpleUnverifiable) {
+		sealResults.WithLabelValues("simple_unverifiable").Inc()
+		log.Warn("arc: not sealed, the newest AMS signs simple header bytes this milter cannot rebuild", "why", why)
+		return milter.RespAccept, nil
+	}
 	if err != nil {
 		// A cv=fail seal would spoil the chain for good over a lookup that
 		// may answer in a minute: the relay keeps the message and retries.
@@ -174,7 +180,8 @@ func (s *session) Body(m *milter.Modifier) (milter.Response, error) {
 		log.Warn("arc: tempfail, a key could not be looked up", "err", err)
 		return milter.RespTempFail, nil
 	}
-	n := s.chain.n + 1
+	// Past a broken field too: a new set never repeats a number there.
+	n := max(s.chain.n, s.chain.highest) + 1
 	results := s.authResults()
 	if results == "" {
 		log.Info("arc: no Authentication-Results from this ADMD, the AAR says none", "authserv_id", s.authservID)

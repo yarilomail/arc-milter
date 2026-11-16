@@ -140,10 +140,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("milter: listen %s: %w", cfg.listenAddr, err)
 	}
-	srv := newMilterServer(cfg, cache, newDNSKeys(net.DefaultResolver))
+	srv := newMilterServer(cfg, cache, newDNSKeys(net.DefaultResolver, cfg.dnsGrace))
 	slog.Info("arc-milter: listening", "addr", cfg.listenAddr, "db", cfg.dbDriver, "decrypt", cfg.decrypt,
 		"seal_domain", cfg.sealDomain, "selector", cfg.selector, "authserv_id", cfg.authservID,
-		"dns_timeout", cfg.dnsTimeout.String(), "db_max_open", cfg.dbMaxOpen, "read_timeout", cfg.milterRead.String(),
+		"dns_timeout", cfg.dnsTimeout.String(), "dns_grace", cfg.dnsGrace.String(), "db_max_open", cfg.dbMaxOpen, "read_timeout", cfg.milterRead.String(),
 		"cache_size", cfg.cacheSize, "cache_ttl", cfg.cacheTTL.String(), "miss_ttl", cfg.cacheMissTTL.String())
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()

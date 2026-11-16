@@ -1,9 +1,14 @@
+// rsa1024min=0 lets a test make and verify a 512-bit key, so the milter's
+// own size check is what refuses it.
+//
+//go:debug rsa1024min=0
 package main
 
 import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
@@ -16,6 +21,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/0kaba0hub/go-milter"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // The fixtures in testdata were sealed by dkimpy (testdata/gen_dkimpy.py),
@@ -103,7 +111,7 @@ func (m *mapKeys) PublicKey(ctx context.Context, selector, domain string) (*rsa.
 	rec, ok := m.records[selector+"._domainkey."+domain]
 	temp, delay := m.temp, m.delay
 	m.mu.Unlock()
-	d := &dnsKeys{lookupTXT: func(ctx context.Context, _ string) ([]string, error) {
+	d := &dnsKeys{grace: time.Hour, now: time.Now, failing: map[string]time.Time{}, lookupTXT: func(ctx context.Context, _ string) ([]string, error) {
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():
@@ -385,5 +393,156 @@ func TestParsePublicKeyRecord(t *testing.T) {
 		if _, err := parsePublicKey(tc.rec); (err == nil) != tc.ok {
 			t.Errorf("%.40q: err %v, ok want %v", tc.rec, err, tc.ok)
 		}
+	}
+}
+
+// A name that keeps failing temporarily tempfails while its first failure
+// is recent and counts as failed past the grace; any answer starts over.
+func TestDNSGraceForANameThatKeepsFailing(t *testing.T) {
+	ck := &clock{t: time.Unix(1_800_000_000, 0)}
+	answer := false
+	d := &dnsKeys{grace: 4 * time.Hour, now: ck.now, failing: map[string]time.Time{},
+		lookupTXT: func(context.Context, string) ([]string, error) {
+			if answer {
+				return nil, &net.DNSError{Err: "no such host", IsNotFound: true}
+			}
+			return nil, &net.DNSError{Err: "server misbehaving", IsTemporary: true}
+		}}
+	try := func() error { _, err := d.PublicKey(t.Context(), "s1", "a.example"); return err }
+	if err := try(); !errors.Is(err, errTempDNS) {
+		t.Fatalf("first failure: %v, want errTempDNS", err)
+	}
+	ck.add(3*time.Hour + 59*time.Minute)
+	if err := try(); !errors.Is(err, errTempDNS) {
+		t.Errorf("inside the grace: %v, want errTempDNS", err)
+	}
+	ck.add(time.Minute)
+	if err := try(); err == nil || errors.Is(err, errTempDNS) {
+		t.Errorf("past the grace: %v, want a permanent failure", err)
+	}
+	answer = true
+	_ = try()
+	answer = false
+	if err := try(); !errors.Is(err, errTempDNS) {
+		t.Errorf("after an answer the name starts over: %v, want errTempDNS", err)
+	}
+}
+
+// amsSimpleChain is one ARC set whose AMS uses simple header
+// canonicalization, signed over the fields as written in raw.
+func amsSimpleChain(t *testing.T, k sealKey, raw string) string {
+	t.Helper()
+	fields, body := parseMessage(t, []byte(raw))
+	names := []string{"From", "Subject"}
+	pairs := [][2]string{{"i", "1"}, {"a", "rsa-sha256"}, {"c", "simple/simple"}, {"d", k.domain}, {"s", k.selector},
+		{"h", "From:Subject"}, {"bh", base64.StdEncoding.EncodeToString(bodyHashes(body)(false, -1))}, {"b", ""}}
+	ams := foldTags(len(hdrAMS), pairs)
+	b, err := signRSA(k, selectHeaders(fields, names, false)+strings.TrimSuffix(simpleHeader(field{hdrAMS, ams}), "\r\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ams += foldBase64(b)
+	aar := " i=1; mx.a.example; none"
+	as := foldTags(len(hdrAS), [][2]string{{"i", "1"}, {"a", "rsa-sha256"}, {"cv", cvNone}, {"d", k.domain}, {"s", k.selector}, {"b", ""}})
+	sets := map[int]*arcSet{1: {aar: field{hdrAAR, aar}, ams: field{hdrAMS, ams}, as: field{hdrAS, as}}}
+	if b, err = signRSA(k, sealInput(sets, 1, 1)); err != nil {
+		t.Fatal(err)
+	}
+	return hdrAS + ":" + as + foldBase64(b) + "\r\n" + hdrAMS + ":" + ams + "\r\n" + hdrAAR + ":" + aar + "\r\n" + raw
+}
+
+// An earlier hop's AMS with simple header canonicalization checks only on
+// the bytes it signed. The milter cannot rebuild a field that had no space,
+// or two, after its colon: such a message is left unsealed, never sealed
+// cv=fail; one written with the usual space seals as pass.
+func TestSimpleHeaderAMSThatCannotBeRebuilt(t *testing.T) {
+	keys := fixtureKeys(t)
+	hop := sealKey{domain: "simple.example", selector: "s", signer: rsaKey(t)}
+	keys.add(t, "s._domainkey.simple.example", hop.signer)
+	c, _ := sealCache(t, keys)
+	addr := startMilter(t, c, keys, 5*time.Second)
+	for _, tc := range []struct {
+		name, subject string
+		sealed        bool
+	}{
+		{"one space", "Subject: hello\r\n", true},
+		{"two spaces", "Subject:  hello\r\n", false},
+		{"no space", "Subject:hello\r\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := amsSimpleChain(t, hop, "From: a@example.org\r\n"+tc.subject+"\r\nbody\r\n")
+			before := testutil.ToFloat64(sealResults.WithLabelValues("simple_unverifiable"))
+			r := send(t, addr, []byte(msg))
+			if (len(r.inserted) == 3) != tc.sealed || r.eom == nil || r.eom.Code != milter.ActAccept {
+				t.Fatalf("eom %+v, %d inserted; sealed want %v", r.eom, len(r.inserted), tc.sealed)
+			}
+			if tc.sealed {
+				if !strings.Contains(relaxedValue(r.inserted[2].HeaderValue), "cv=pass;") {
+					t.Errorf("seal %q, want cv=pass", r.inserted[2].HeaderValue)
+				}
+				return
+			}
+			if testutil.ToFloat64(sealResults.WithLabelValues("simple_unverifiable")) != before+1 {
+				t.Error("simple_unverifiable not counted")
+			}
+		})
+	}
+}
+
+// RFC 8301: a key under 1024 bits makes its signature fail, so a chain with
+// one is never vouched for with cv=pass; nor does this milter seal with one.
+func TestSmallKeysFail(t *testing.T) {
+	small, err := rsa.GenerateKey(rand.Reader, 512)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := fixtureKeys(t)
+	k := sealKey{domain: "small.example", selector: "s", signer: small}
+	keys.add(t, "s._domainkey.small.example", small)
+	sealed, _ := sealOn(t, []byte("From: a@example.org\r\nSubject: s\r\n\r\nbody\r\n"), k, keys, authserv)
+	if cv, why := validateMessage(t, sealed, keys); cv != cvFail || !strings.Contains(why, "under 1024") {
+		t.Errorf("a 512-bit seal: cv=%s (%s), want fail for its size", cv, why)
+	}
+	der := x509.MarshalPKCS1PrivateKey(small)
+	if _, err := parsePrivateKey(der); err == nil {
+		t.Error("a 512-bit private key was taken for sealing")
+	}
+}
+
+// The new set takes the number after the highest i= of any ARC field, read
+// past a broken one, so it never repeats a number already there; at 50 there
+// is no new set.
+func TestNewInstanceIsAboveEveryNumberThere(t *testing.T) {
+	keys := fixtureKeys(t)
+	c, _ := sealCache(t, keys)
+	addr := startMilter(t, c, keys, 5*time.Second)
+	for _, tc := range []struct {
+		name, extra string
+		want        string // the new instance; empty for no seal
+	}{
+		{"a broken field names 4", "ARC-Message-Signature: i=4; broken\r\n", "i=5;"},
+		{"a broken field names 50", "ARC-Seal: i=50; broken\r\n", ""},
+		{"a broken field names 51", "ARC-Seal: i=51; cv=pass\r\n", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := send(t, addr, append([]byte(tc.extra), fixture(t, "one-hop.eml")...))
+			if tc.want == "" {
+				if r.eoh.Code != milter.ActAccept || len(r.inserted) != 0 {
+					t.Errorf("eoh %+v, %d inserted; want no seal", r.eoh, len(r.inserted))
+				}
+				return
+			}
+			if len(r.inserted) != 3 {
+				t.Fatalf("%d inserted", len(r.inserted))
+			}
+			for _, m := range r.inserted {
+				if !strings.HasPrefix(relaxedValue(m.HeaderValue), tc.want) {
+					t.Errorf("%s %q, want %s", m.HeaderName, m.HeaderValue, tc.want)
+				}
+			}
+			if !strings.Contains(relaxedValue(r.inserted[2].HeaderValue), "cv=fail;") {
+				t.Errorf("seal over a broken chain %q, want cv=fail", r.inserted[2].HeaderValue)
+			}
+		})
 	}
 }
