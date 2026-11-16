@@ -138,7 +138,11 @@ func TestLoadConfig(t *testing.T) {
 		{"seal domain not a name", map[string]string{"SEAL_DOMAIN": "fwd example"}, false},
 		{"no authserv-id", map[string]string{"AUTHSERV_ID": ""}, false},
 		{"authserv-id with a space", map[string]string{"AUTHSERV_ID": "mx example"}, false},
-		{"selector of two labels", map[string]string{"ARC_SELECTOR": "a.b"}, false},
+		{"selector of two labels", map[string]string{"ARC_SELECTOR": "arc.b"}, false},
+		{"selector after a rotation", map[string]string{"ARC_SELECTOR": "arc-2027"}, true},
+		{"selector not arc", map[string]string{"ARC_SELECTOR": "s2026"}, false},
+		{"selector only starting with arc", map[string]string{"ARC_SELECTOR": "archive"}, false},
+		{"selector arc- alone", map[string]string{"ARC_SELECTOR": "arc-"}, false},
 		{"DNS timeout 0", map[string]string{"DNS_TIMEOUT_SECONDS": "0"}, false},
 		{"vault without an address", map[string]string{"KEY_DECRYPT": "vault"}, false},
 		{"memory by default, no Redis needed", map[string]string{"DNS_FAILURE_STORE": "memory"}, true},
@@ -157,7 +161,7 @@ func TestLoadConfig(t *testing.T) {
 			if (err == nil) != tc.ok {
 				t.Fatalf("err %v, ok want %v", err, tc.ok)
 			}
-			if tc.ok && (c.sealDomain != "fwd.example" || c.selector != "arc" || c.dnsTimeout.Seconds() != defaultDNSTimeout) {
+			if tc.ok && (c.sealDomain != "fwd.example" || !validSelector.MatchString(c.selector) || c.dnsTimeout.Seconds() != defaultDNSTimeout) {
 				t.Errorf("config %+v", c)
 			}
 		})

@@ -45,7 +45,7 @@ Every key lookup of one message shares one deadline, `DNS_TIMEOUT_SECONDS`: slow
 
 ## Key
 
-ARC defines `rsa-sha256` only, so the key is RSA. It is a row of its own in the `dkim` table: `domain` is the forwarder's domain (the same `fwd.<domain>` dkim-milter-fwd signs with and the SRS rewriting uses), `selector` is `ARC_SELECTOR` (`arc`). Rotating or revoking it never touches the forwarder's DKIM key, and a verifier sees by the selector which signature made what. The key query reads only that selector's row; a DKIM signer that reads a domain's newest row must leave the `arc` selector out.
+ARC defines `rsa-sha256` only, so the key is RSA. It is a row of its own in the `dkim` table: `domain` is the forwarder's domain (the same `fwd.<domain>` dkim-milter-fwd signs with and the SRS rewriting uses), `selector` is `ARC_SELECTOR` (`arc`). Rotating or revoking it never touches the forwarder's DKIM key, and a verifier sees by the selector which signature made what. The key query reads only that selector's row. The selector is `arc` or `arc-<label>`, and a rotation takes a new one (`arc-2027`) while the old key stays in DNS for a while: dkim-milter leaves exactly these selectors out of its own key query, so a DKIM selector may not be named so.
 
 ```sh
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out arc.key
@@ -80,7 +80,7 @@ The milter protocol version 2 this milter speaks has Postfix drop the space afte
 | Variable | Default | What |
 |:---|:---|:---|
 | `SEAL_DOMAIN` | --- (required) | `d=` of every seal, and the key row's domain |
-| `ARC_SELECTOR` | `arc` | `s=`, and the key row's selector |
+| `ARC_SELECTOR` | `arc` | `s=`, and the key row's selector: `arc` or `arc-<label>` (`arc-2027` after a rotation), the selectors dkim-milter leaves out of its key query; any other is refused at start |
 | `AUTHSERV_ID` | --- (required) | the authserv-id of this ADMD's `Authentication-Results`, copied into the AAR |
 | `DNS_TIMEOUT_SECONDS` | `10` | one deadline for the key lookups of a message |
 | `DNS_TEMPFAIL_GRACE_SECONDS` | `14400` | how long a key name may keep failing temporarily before its signature counts as failed |
